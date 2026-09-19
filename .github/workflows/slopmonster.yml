@@ -1,0 +1,73 @@
+name: SlopMonster copy gate
+
+on:
+  push:
+    branches: [main, integrate-slopmonster]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  slopmonster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install site dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      - name: Fetch pinned SlopMonster scorer
+        run: |
+          mkdir -p .slopmonster
+          curl -fsSL \
+            https://raw.githubusercontent.com/ItsssssJack/SlopMonster/f261dbf11c2a206ecd8780c070a46dae64edd8be/tools/deslop.py \
+            -o .slopmonster/deslop.py
+
+      - name: Start rendered site
+        run: |
+          npm run start > /tmp/ryanleej-next.log 2>&1 &
+          echo $! > /tmp/ryanleej-next.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/ryanleej-next.log
+          exit 1
+
+      - name: Scan rendered pages
+        shell: bash
+        run: |
+          set +e
+          routes=("/" "/about" "/blog" "/contact" "/ms-ai-tools")
+          failed=0
+          for route in "${routes[@]}"; do
+            safe=$(echo "$route" | sed 's#^/$#home#; s#^/##; s#/#-#g')
+            file="/tmp/slop-${safe}.html"
+            echo ""
+            echo "===== $route ====="
+            if ! curl -fsS "http://127.0.0.1:3000$route" -o "$file"; then
+              echo "Could not fetch $route"
+              failed=1
+              continue
+            fi
+            python3 .slopmonster/deslop.py "$file"
+            code=$?
+            if [ $code -ne 0 ]; then
+              failed=1
+            fi
+          done
+          exit $failed
